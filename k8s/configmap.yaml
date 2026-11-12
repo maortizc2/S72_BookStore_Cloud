@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bookstore-config
+  labels:
+    app: bookstore
+data:
+  # ============================================================
+  # Frontend (Nginx Reverse Proxy)
+  # ============================================================
+  NGINX_PORT: "80"
+  API_PROXY_PREFIX: "/api"
+  # Resuelve al Service ClusterIP 'backend' dentro del clúster EKS
+  PROXY_PASS: "http://backend:5001"
+
+  # ============================================================
+  # Backend API (Node.js)
+  # ============================================================
+  NODE_ENV: "production"
+  SERVICE_NAME: "bookstore-api"
+  PORT: "5001"
+  API_BASE_PATH: "/api"
+  # Reemplazar con el DNS público del LoadBalancer de Kubernetes (ej. http://a1b2c3d4...-123456.us-east-1.elb.amazonaws.com)
+  CORS_ORIGINS: "http://localhost:8080,http://aa0d866e26bbe4c1eb4914ea67b3b4ec-1457860551.us-east-1.elb.amazonaws.com"
+
+  BOOKS_DEFAULT_LIMIT: "24"
+  BOOKS_MAX_LIMIT: "100"
+  ORDERS_MAX_DISTINCT_ITEMS: "100"
+  ORDERS_MAX_QUANTITY_PER_ITEM: "1000"
+
+  # ============================================================
+  # Proxy & Clickstream Logging (Volumen compartido con Sidecar)
+  # ============================================================
+  HTTP_TRUST_PROXY_HOPS: "1"
+  HTTP_JSON_BODY_LIMIT: "32kb"
+  ACCESS_LOG_ENABLED: "true"
+  ACCESS_LOG_EXCLUDE_PATHS: "/health"
+  ACCESS_LOG_MAX_FIELD_LENGTH: "2048"
+  ACCESS_LOG_REQUEST_ID_HEADER: "X-Request-Id"
+  CLICKSTREAM_FILE_ENABLED: "true"
+  CLICKSTREAM_FILE_PATH: "/usr/src/app/logs/clickstream.log"
+
+  # ============================================================
+  # Autenticación / Sesión
+  # ============================================================
+  AUTH_JWT_ALGORITHM: "HS256"
+  AUTH_JWT_ISSUER: "bookstore-api"
+  AUTH_JWT_AUDIENCE: "bookstore-web"
+  AUTH_TOKEN_TTL_SECONDS: "28800"
+  AUTH_COOKIE_NAME: "bookstore_session"
+  AUTH_COOKIE_SECURE: "false"
+  AUTH_COOKIE_SAME_SITE: "lax"
+  AUTH_COOKIE_PATH: "/api"
+
+  # ============================================================
+  # Amazon RDS PostgreSQL (Subred Privada)
+  # ============================================================
+  DB_HOST: "bookstore-db.cj662yecy80j.us-east-1.rds.amazonaws.com"
+  DB_PORT: "5432"
+  DB_NAME: "bookstore"
+  DB_USER: "bookstore_app"
+  DB_SSL: "true"
+  DB_SSL_REJECT_UNAUTHORIZED: "false"
+  DB_POOL_MAX: "10"
+  DB_IDLE_TIMEOUT_MS: "30000"
+  DB_CONNECTION_TIMEOUT_MS: "5000"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-sidecar-config
+  labels:
+    app: bookstore
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush         5
+        Daemon        Off
+        Log_Level     info
+
+    [INPUT]
+        Name              tail
+        Tag               clickstream
+        Path              /usr/src/app/logs/clickstream.log
+        Read_from_Head    True
+        Refresh_Interval  5
+        Skip_Long_Lines   On
+
+    [OUTPUT]
+        Name              cloudwatch_logs
+        Match             clickstream
+        region            us-east-1
+        log_group_name    /bookstore/clickstream
+        log_stream_prefix sidecar-
+        auto_create_group true
+        # También imprime en stdout del contenedor sidecar para verificar con kubectl logs
+    [OUTPUT]
+        Name              stdout
+        Match             clickstream
+

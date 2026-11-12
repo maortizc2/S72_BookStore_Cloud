@@ -48,5 +48,9 @@ compose.override.yaml
 # RDS bootstrap credentials
 database/rds/bootstrap.env
 
+# Local AWS & Kubernetes credentials/state
+.aws/
+.kube/
+
 # Course documents (kept outside the repository)
 docs/

@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels:
+    app: frontend
+    tier: web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+        tier: web
+    spec:
+      containers:
+        - name: frontend-nginx
+          image: 209049613313.dkr.ecr.us-east-1.amazonaws.com/bookstore-frontend:8.1.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+              name: http
+          env:
+            - name: NGINX_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: bookstore-config
+                  key: NGINX_PORT
+            - name: API_PROXY_PREFIX
+              valueFrom:
+                configMapKeyRef:
+                  name: bookstore-config
+                  key: API_PROXY_PREFIX
+            - name: PROXY_PASS
+              valueFrom:
+                configMapKeyRef:
+                  name: bookstore-config
+                  key: PROXY_PASS
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+

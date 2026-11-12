@@ -1,0 +1,97 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app: backend
+    tier: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+        tier: api
+    spec:
+      # Garantiza que el usuario 'node' (UID/GID 1000) tenga permisos de escritura en el volumen emptyDir
+      securityContext:
+        fsGroup: 1000
+
+      containers:
+        # ============================================================
+        # Contenedor 1: Contenedor Principal (API Node.js)
+        # Escribe los eventos de clickstream en /usr/src/app/logs/clickstream.log
+        # ============================================================
+        - name: backend-api
+          image: 209049613313.dkr.ecr.us-east-1.amazonaws.com/bookstore-backend:8.1.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5001
+              name: http
+          envFrom:
+            - configMapRef:
+                name: bookstore-config
+            - secretRef:
+                name: bookstore-secrets
+          volumeMounts:
+            - name: clickstream-logs
+              mountPath: /usr/src/app/logs
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5001
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5001
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+        # ============================================================
+        # Contenedor 2: Patrón Sidecar (Recolector de Logs -> CloudWatch + stdout)
+        # Lee continuamente /usr/src/app/logs/clickstream.log desde el volumen
+        # compartido emptyDir y lo envía a Amazon CloudWatch Logs (/bookstore/clickstream)
+        # sin bloquear el hilo principal de la API Node.js.
+        # ============================================================
+        - name: clickstream-sidecar
+          image: public.ecr.aws/aws-observability/aws-for-fluent-bit:stable
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: clickstream-logs
+              mountPath: /usr/src/app/logs
+              readOnly: true
+            - name: fluent-bit-config
+              mountPath: /fluent-bit/etc/fluent-bit.conf
+              subPath: fluent-bit.conf
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+
+      # ============================================================
+      # Volumen interno compartido entre el contenedor principal y el Sidecar
+      # ============================================================
+      volumes:
+        - name: clickstream-logs
+          emptyDir: {}
+        - name: fluent-bit-config
+          configMap:
+            name: fluent-bit-sidecar-config
+
