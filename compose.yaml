@@ -1,51 +1,93 @@
-# Local environment: PostgreSQL, database bootstrap, backend and frontend.
+# Microservices environment: 3 independent PostgreSQL databases (DB Auth, DB Books, DB Orders),
+# database bootstrap, 3 backend microservices (auth-service, books-service, orders-service)
+# and an API Gateway. Frontend is served directly from Cloudflare CDN.
 #
 # Usage: docker compose up --build
 
 services:
-  postgres:
+  postgres-auth:
     image: ${POSTGRES_IMAGE:?POSTGRES_IMAGE is required}
     restart: unless-stopped
-
-    # The official image expects its own variable names
     environment:
-      POSTGRES_DB: ${DB_NAME:?DB_NAME is required}
+      POSTGRES_DB: ${AUTH_DB_NAME:?AUTH_DB_NAME is required}
       POSTGRES_USER: ${DB_ADMIN_USER:?DB_ADMIN_USER is required}
       POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD is required}
-
     ports:
-      - "${POSTGRES_HOST_PORT:?POSTGRES_HOST_PORT is required}:5432"
-
+      - "${AUTH_DB_HOST_PORT:-5432}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-
+      - postgres_auth_data:/var/lib/postgresql/data
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"
-        ]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 5s
-
     networks:
       - back-tier
 
-  # One-shot container: creates roles, schema, grants and seed, then exits
+  postgres-books:
+    image: ${POSTGRES_IMAGE:?POSTGRES_IMAGE is required}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${BOOKS_DB_NAME:?BOOKS_DB_NAME is required}
+      POSTGRES_USER: ${DB_ADMIN_USER:?DB_ADMIN_USER is required}
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD is required}
+    ports:
+      - "${BOOKS_DB_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres_books_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - back-tier
+
+  postgres-orders:
+    image: ${POSTGRES_IMAGE:?POSTGRES_IMAGE is required}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${ORDERS_DB_NAME:?ORDERS_DB_NAME is required}
+      POSTGRES_USER: ${DB_ADMIN_USER:?DB_ADMIN_USER is required}
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD is required}
+    ports:
+      - "${ORDERS_DB_HOST_PORT:-5434}:5432"
+    volumes:
+      - postgres_orders_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - back-tier
+
+  # One-shot container: initializes roles, schemas, grants and seed across the 3 databases
   bootstrap:
     image: ${BOOTSTRAP_IMAGE:?BOOTSTRAP_IMAGE is required}
     restart: "no"
-
     depends_on:
-      postgres:
+      postgres-auth:
         condition: service_healthy
-
+      postgres-books:
+        condition: service_healthy
+      postgres-orders:
+        condition: service_healthy
     environment:
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_NAME: ${DB_NAME:?DB_NAME is required}
+      AUTH_DB_HOST: postgres-auth
+      AUTH_DB_PORT: 5432
+      AUTH_DB_NAME: ${AUTH_DB_NAME:?AUTH_DB_NAME is required}
+
+      BOOKS_DB_HOST: postgres-books
+      BOOKS_DB_PORT: 5432
+      BOOKS_DB_NAME: ${BOOKS_DB_NAME:?BOOKS_DB_NAME is required}
+
+      ORDERS_DB_HOST: postgres-orders
+      ORDERS_DB_PORT: 5432
+      ORDERS_DB_NAME: ${ORDERS_DB_NAME:?ORDERS_DB_NAME is required}
 
       DB_ADMIN_USER: ${DB_ADMIN_USER:?DB_ADMIN_USER is required}
       DB_ADMIN_PASSWORD: ${DB_ADMIN_PASSWORD:?DB_ADMIN_PASSWORD is required}
@@ -57,41 +99,31 @@ services:
       INGEST_DB_PASSWORD: ${INGEST_DB_PASSWORD:?INGEST_DB_PASSWORD is required}
 
       PGSSLMODE: disable
-
     volumes:
       - ./database:/database:ro
-
     working_dir: /database/rds
-
     entrypoint:
       - /bin/bash
       - ./bootstrap.sh
-
     networks:
       - back-tier
 
-  backend:
-    image: ${IMAGE_REGISTRY:?IMAGE_REGISTRY is required}/bookstore-backend:${IMAGE_TAG:?IMAGE_TAG is required}
-
+  # ============================================================
+  # Microservice 1: Auth Service
+  # ============================================================
+  auth-service:
+    image: ${IMAGE_REGISTRY:?IMAGE_REGISTRY is required}/bookstore-auth-service:${IMAGE_TAG:?IMAGE_TAG is required}
     build:
-      context: ./backend
+      context: ./backend/auth-service
       args:
         NODE_IMAGE: ${NODE_IMAGE:?NODE_IMAGE is required}
-
     restart: unless-stopped
-
     environment:
       NODE_ENV: ${NODE_ENV:?NODE_ENV is required}
-      SERVICE_NAME: ${SERVICE_NAME:?SERVICE_NAME is required}
-      PORT: ${PORT:?PORT is required}
+      SERVICE_NAME: bookstore-auth-service
+      PORT: ${AUTH_SERVICE_PORT:-5001}
       API_BASE_PATH: ${API_BASE_PATH:?API_BASE_PATH is required}
       CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
-
-      BOOKS_DEFAULT_LIMIT: ${BOOKS_DEFAULT_LIMIT:?BOOKS_DEFAULT_LIMIT is required}
-      BOOKS_MAX_LIMIT: ${BOOKS_MAX_LIMIT:?BOOKS_MAX_LIMIT is required}
-
-      ORDERS_MAX_DISTINCT_ITEMS: ${ORDERS_MAX_DISTINCT_ITEMS:?ORDERS_MAX_DISTINCT_ITEMS is required}
-      ORDERS_MAX_QUANTITY_PER_ITEM: ${ORDERS_MAX_QUANTITY_PER_ITEM:?ORDERS_MAX_QUANTITY_PER_ITEM is required}
 
       HTTP_TRUST_PROXY_HOPS: ${HTTP_TRUST_PROXY_HOPS:?HTTP_TRUST_PROXY_HOPS is required}
       HTTP_JSON_BODY_LIMIT: ${HTTP_JSON_BODY_LIMIT:?HTTP_JSON_BODY_LIMIT is required}
@@ -104,16 +136,14 @@ services:
       CLICKSTREAM_FILE_ENABLED: ${CLICKSTREAM_FILE_ENABLED:?CLICKSTREAM_FILE_ENABLED is required}
       CLICKSTREAM_FILE_PATH: ${CLICKSTREAM_FILE_PATH:?CLICKSTREAM_FILE_PATH is required}
 
-      # Runtime database identity (least privilege, never the admin role)
-      DB_HOST: ${DB_HOST:?DB_HOST is required}
-      DB_PORT: ${DB_PORT:?DB_PORT is required}
-      DB_NAME: ${DB_NAME:?DB_NAME is required}
+      # Dedicated Auth database connection
+      DB_HOST: ${AUTH_DB_HOST:-postgres-auth}
+      DB_PORT: ${AUTH_DB_PORT:-5432}
+      DB_NAME: ${AUTH_DB_NAME:?AUTH_DB_NAME is required}
       DB_USER: ${APP_DB_USER:?APP_DB_USER is required}
       DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD is required}
-
       DB_SSL: ${DB_SSL:?DB_SSL is required}
       DB_SSL_REJECT_UNAUTHORIZED: ${DB_SSL_REJECT_UNAUTHORIZED:?DB_SSL_REJECT_UNAUTHORIZED is required}
-
       DB_POOL_MAX: ${DB_POOL_MAX:?DB_POOL_MAX is required}
       DB_IDLE_TIMEOUT_MS: ${DB_IDLE_TIMEOUT_MS:?DB_IDLE_TIMEOUT_MS is required}
       DB_CONNECTION_TIMEOUT_MS: ${DB_CONNECTION_TIMEOUT_MS:?DB_CONNECTION_TIMEOUT_MS is required}
@@ -128,69 +158,198 @@ services:
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:?AUTH_COOKIE_SECURE is required}
       AUTH_COOKIE_SAME_SITE: ${AUTH_COOKIE_SAME_SITE:?AUTH_COOKIE_SAME_SITE is required}
       AUTH_COOKIE_PATH: ${AUTH_COOKIE_PATH:?AUTH_COOKIE_PATH is required}
-
     ports:
-      - "${BACKEND_HOST_PORT:?BACKEND_HOST_PORT is required}:${PORT:?PORT is required}"
-
+      - "${AUTH_HOST_PORT:-5001}:${AUTH_SERVICE_PORT:-5001}"
     volumes:
       - clickstream_logs:/usr/src/app/logs
-
-    # The backend starts only after the database has been bootstrapped
     depends_on:
       bootstrap:
         condition: service_completed_successfully
-
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "wget -q --spider http://localhost:$$PORT/health"
-        ]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:$$PORT/health"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 5s
-
     init: true
-
     networks:
-      - front-tier
       - back-tier
 
-  frontend:
-    image: ${IMAGE_REGISTRY:?IMAGE_REGISTRY is required}/bookstore-frontend:${IMAGE_TAG:?IMAGE_TAG is required}
-
+  # ============================================================
+  # Microservice 2: Books Catalog Service
+  # ============================================================
+  books-service:
+    image: ${IMAGE_REGISTRY:?IMAGE_REGISTRY is required}/bookstore-books-service:${IMAGE_TAG:?IMAGE_TAG is required}
     build:
-      context: ./frontend
+      context: ./backend/books-service
       args:
         NODE_IMAGE: ${NODE_IMAGE:?NODE_IMAGE is required}
-        NGINX_IMAGE: ${NGINX_IMAGE:?NGINX_IMAGE is required}
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:?VITE_API_BASE_URL is required}
-        VITE_API_PREFIX: ${API_PROXY_PREFIX:?API_PROXY_PREFIX is required}
-        VITE_CURRENCY_LOCALE: ${VITE_CURRENCY_LOCALE:?VITE_CURRENCY_LOCALE is required}
-        VITE_CURRENCY_CODE: ${VITE_CURRENCY_CODE:?VITE_CURRENCY_CODE is required}
-
     restart: unless-stopped
-
     environment:
-      NGINX_PORT: ${NGINX_PORT:?NGINX_PORT is required}
-      API_PROXY_PREFIX: ${API_PROXY_PREFIX:?API_PROXY_PREFIX is required}
-      PROXY_PASS: ${PROXY_PASS:?PROXY_PASS is required}
+      NODE_ENV: ${NODE_ENV:?NODE_ENV is required}
+      SERVICE_NAME: bookstore-books-service
+      PORT: ${BOOKS_SERVICE_PORT:-5002}
+      API_BASE_PATH: ${API_BASE_PATH:?API_BASE_PATH is required}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
 
+      BOOKS_DEFAULT_LIMIT: ${BOOKS_DEFAULT_LIMIT:?BOOKS_DEFAULT_LIMIT is required}
+      BOOKS_MAX_LIMIT: ${BOOKS_MAX_LIMIT:?BOOKS_MAX_LIMIT is required}
+
+      HTTP_TRUST_PROXY_HOPS: ${HTTP_TRUST_PROXY_HOPS:?HTTP_TRUST_PROXY_HOPS is required}
+      HTTP_JSON_BODY_LIMIT: ${HTTP_JSON_BODY_LIMIT:?HTTP_JSON_BODY_LIMIT is required}
+
+      ACCESS_LOG_ENABLED: ${ACCESS_LOG_ENABLED:?ACCESS_LOG_ENABLED is required}
+      ACCESS_LOG_EXCLUDE_PATHS: ${ACCESS_LOG_EXCLUDE_PATHS:?ACCESS_LOG_EXCLUDE_PATHS is required}
+      ACCESS_LOG_MAX_FIELD_LENGTH: ${ACCESS_LOG_MAX_FIELD_LENGTH:?ACCESS_LOG_MAX_FIELD_LENGTH is required}
+      ACCESS_LOG_REQUEST_ID_HEADER: ${ACCESS_LOG_REQUEST_ID_HEADER:?ACCESS_LOG_REQUEST_ID_HEADER is required}
+
+      CLICKSTREAM_FILE_ENABLED: ${CLICKSTREAM_FILE_ENABLED:?CLICKSTREAM_FILE_ENABLED is required}
+      CLICKSTREAM_FILE_PATH: ${CLICKSTREAM_FILE_PATH:?CLICKSTREAM_FILE_PATH is required}
+
+      # Dedicated Books Catalog database connection
+      DB_HOST: ${BOOKS_DB_HOST:-postgres-books}
+      DB_PORT: ${BOOKS_DB_PORT:-5432}
+      DB_NAME: ${BOOKS_DB_NAME:?BOOKS_DB_NAME is required}
+      DB_USER: ${APP_DB_USER:?APP_DB_USER is required}
+      DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD is required}
+      DB_SSL: ${DB_SSL:?DB_SSL is required}
+      DB_SSL_REJECT_UNAUTHORIZED: ${DB_SSL_REJECT_UNAUTHORIZED:?DB_SSL_REJECT_UNAUTHORIZED is required}
+      DB_POOL_MAX: ${DB_POOL_MAX:?DB_POOL_MAX is required}
+      DB_IDLE_TIMEOUT_MS: ${DB_IDLE_TIMEOUT_MS:?DB_IDLE_TIMEOUT_MS is required}
+      DB_CONNECTION_TIMEOUT_MS: ${DB_CONNECTION_TIMEOUT_MS:?DB_CONNECTION_TIMEOUT_MS is required}
+
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET is required}
+      AUTH_JWT_ALGORITHM: ${AUTH_JWT_ALGORITHM:?AUTH_JWT_ALGORITHM is required}
+      AUTH_JWT_ISSUER: ${AUTH_JWT_ISSUER:?AUTH_JWT_ISSUER is required}
+      AUTH_JWT_AUDIENCE: ${AUTH_JWT_AUDIENCE:?AUTH_JWT_AUDIENCE is required}
+      AUTH_TOKEN_TTL_SECONDS: ${AUTH_TOKEN_TTL_SECONDS:?AUTH_TOKEN_TTL_SECONDS is required}
+
+      AUTH_COOKIE_NAME: ${AUTH_COOKIE_NAME:?AUTH_COOKIE_NAME is required}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:?AUTH_COOKIE_SECURE is required}
+      AUTH_COOKIE_SAME_SITE: ${AUTH_COOKIE_SAME_SITE:?AUTH_COOKIE_SAME_SITE is required}
+      AUTH_COOKIE_PATH: ${AUTH_COOKIE_PATH:?AUTH_COOKIE_PATH is required}
     ports:
-      - "${FRONTEND_HOST_PORT:?FRONTEND_HOST_PORT is required}:${NGINX_PORT:?NGINX_PORT is required}"
-
+      - "${BOOKS_HOST_PORT:-5002}:${BOOKS_SERVICE_PORT:-5002}"
+    volumes:
+      - clickstream_logs:/usr/src/app/logs
     depends_on:
-      backend:
-        condition: service_healthy
-
+      bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:$$PORT/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    init: true
     networks:
-      - front-tier
+      - back-tier
+
+  # ============================================================
+  # Microservice 3: Orders Service
+  # ============================================================
+  orders-service:
+    image: ${IMAGE_REGISTRY:?IMAGE_REGISTRY is required}/bookstore-orders-service:${IMAGE_TAG:?IMAGE_TAG is required}
+    build:
+      context: ./backend/orders-service
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:?NODE_IMAGE is required}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: ${NODE_ENV:?NODE_ENV is required}
+      SERVICE_NAME: bookstore-orders-service
+      PORT: ${ORDERS_SERVICE_PORT:-5003}
+      API_BASE_PATH: ${API_BASE_PATH:?API_BASE_PATH is required}
+      CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS is required}
+
+      ORDERS_MAX_DISTINCT_ITEMS: ${ORDERS_MAX_DISTINCT_ITEMS:?ORDERS_MAX_DISTINCT_ITEMS is required}
+      ORDERS_MAX_QUANTITY_PER_ITEM: ${ORDERS_MAX_QUANTITY_PER_ITEM:?ORDERS_MAX_QUANTITY_PER_ITEM is required}
+
+      AUTH_SERVICE_URL: http://auth-service:${AUTH_SERVICE_PORT:-5001}
+      BOOKS_SERVICE_URL: http://books-service:${BOOKS_SERVICE_PORT:-5002}
+
+      HTTP_TRUST_PROXY_HOPS: ${HTTP_TRUST_PROXY_HOPS:?HTTP_TRUST_PROXY_HOPS is required}
+      HTTP_JSON_BODY_LIMIT: ${HTTP_JSON_BODY_LIMIT:?HTTP_JSON_BODY_LIMIT is required}
+
+      ACCESS_LOG_ENABLED: ${ACCESS_LOG_ENABLED:?ACCESS_LOG_ENABLED is required}
+      ACCESS_LOG_EXCLUDE_PATHS: ${ACCESS_LOG_EXCLUDE_PATHS:?ACCESS_LOG_EXCLUDE_PATHS is required}
+      ACCESS_LOG_MAX_FIELD_LENGTH: ${ACCESS_LOG_MAX_FIELD_LENGTH:?ACCESS_LOG_MAX_FIELD_LENGTH is required}
+      ACCESS_LOG_REQUEST_ID_HEADER: ${ACCESS_LOG_REQUEST_ID_HEADER:?ACCESS_LOG_REQUEST_ID_HEADER is required}
+
+      CLICKSTREAM_FILE_ENABLED: ${CLICKSTREAM_FILE_ENABLED:?CLICKSTREAM_FILE_ENABLED is required}
+      CLICKSTREAM_FILE_PATH: ${CLICKSTREAM_FILE_PATH:?CLICKSTREAM_FILE_PATH is required}
+
+      # Dedicated Orders database connection
+      DB_HOST: ${ORDERS_DB_HOST:-postgres-orders}
+      DB_PORT: ${ORDERS_DB_PORT:-5432}
+      DB_NAME: ${ORDERS_DB_NAME:?ORDERS_DB_NAME is required}
+      DB_USER: ${APP_DB_USER:?APP_DB_USER is required}
+      DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD is required}
+      DB_SSL: ${DB_SSL:?DB_SSL is required}
+      DB_SSL_REJECT_UNAUTHORIZED: ${DB_SSL_REJECT_UNAUTHORIZED:?DB_SSL_REJECT_UNAUTHORIZED is required}
+      DB_POOL_MAX: ${DB_POOL_MAX:?DB_POOL_MAX is required}
+      DB_IDLE_TIMEOUT_MS: ${DB_IDLE_TIMEOUT_MS:?DB_IDLE_TIMEOUT_MS is required}
+      DB_CONNECTION_TIMEOUT_MS: ${DB_CONNECTION_TIMEOUT_MS:?DB_CONNECTION_TIMEOUT_MS is required}
+
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET is required}
+      AUTH_JWT_ALGORITHM: ${AUTH_JWT_ALGORITHM:?AUTH_JWT_ALGORITHM is required}
+      AUTH_JWT_ISSUER: ${AUTH_JWT_ISSUER:?AUTH_JWT_ISSUER is required}
+      AUTH_JWT_AUDIENCE: ${AUTH_JWT_AUDIENCE:?AUTH_JWT_AUDIENCE is required}
+      AUTH_TOKEN_TTL_SECONDS: ${AUTH_TOKEN_TTL_SECONDS:?AUTH_TOKEN_TTL_SECONDS is required}
+
+      AUTH_COOKIE_NAME: ${AUTH_COOKIE_NAME:?AUTH_COOKIE_NAME is required}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:?AUTH_COOKIE_SECURE is required}
+      AUTH_COOKIE_SAME_SITE: ${AUTH_COOKIE_SAME_SITE:?AUTH_COOKIE_SAME_SITE is required}
+      AUTH_COOKIE_PATH: ${AUTH_COOKIE_PATH:?AUTH_COOKIE_PATH is required}
+    ports:
+      - "${ORDERS_HOST_PORT:-5003}:${ORDERS_SERVICE_PORT:-5003}"
+    volumes:
+      - clickstream_logs:/usr/src/app/logs
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:$$PORT/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    init: true
+    networks:
+      - back-tier
+
+  # ============================================================
+  # API Gateway (Path-based routing to Auth, Books, and Orders)
+  # ============================================================
+  api-gateway:
+    image: ${IMAGE_REGISTRY:?IMAGE_REGISTRY is required}/bookstore-api-gateway:${IMAGE_TAG:?IMAGE_TAG is required}
+    build:
+      context: ./backend/api-gateway
+      args:
+        NGINX_IMAGE: ${NGINX_IMAGE:-nginx:1.27-alpine}
+    restart: unless-stopped
+    environment:
+      GATEWAY_PORT: ${GATEWAY_PORT:-8080}
+      AUTH_SERVICE_URL: http://auth-service:${AUTH_SERVICE_PORT:-5001}
+      BOOKS_SERVICE_URL: http://books-service:${BOOKS_SERVICE_PORT:-5002}
+      ORDERS_SERVICE_URL: http://orders-service:${ORDERS_SERVICE_PORT:-5003}
+    ports:
+      - "${GATEWAY_HOST_PORT:-8080}:${GATEWAY_PORT:-8080}"
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      books-service:
+        condition: service_healthy
+      orders-service:
+        condition: service_healthy
+    networks:
+      - back-tier
 
 volumes:
-  postgres_data:
+  postgres_auth_data:
+  postgres_books_data:
+  postgres_orders_data:
   clickstream_logs:
 
 networks:
-  front-tier:
   back-tier:

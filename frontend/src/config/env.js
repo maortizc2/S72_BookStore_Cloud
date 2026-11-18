@@ -8,6 +8,14 @@ const requiredValue = (name) => {
   return value;
 };
 
+const normalizeBaseUrl = (value) => {
+  if (value === "/") {
+    return value;
+  }
+
+  return value.replace(/\/+$/, "");
+};
+
 const normalizePrefix = (value, name) => {
   if (!value.startsWith("/")) {
     throw new Error(`${name} must start with '/'`);
@@ -17,7 +25,7 @@ const normalizePrefix = (value, name) => {
 };
 
 export const frontendConfig = Object.freeze({
-  apiBaseUrl: requiredValue("VITE_API_BASE_URL"),
+  apiBaseUrl: normalizeBaseUrl(requiredValue("VITE_API_BASE_URL")),
   apiPrefix: normalizePrefix(requiredValue("VITE_API_PREFIX"), "VITE_API_PREFIX"),
   currency: Object.freeze({
     locale: requiredValue("VITE_CURRENCY_LOCALE"),

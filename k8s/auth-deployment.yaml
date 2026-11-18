@@ -1,0 +1,118 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  labels:
+    app: auth-service
+    tier: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+        tier: api
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: auth-service
+          image: 209049613313.dkr.ecr.us-east-1.amazonaws.com/bookstore-auth-service:8.1.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5001
+              name: http
+          envFrom:
+            - configMapRef:
+                name: bookstore-config
+            - secretRef:
+                name: bookstore-secrets
+          env:
+            - name: SERVICE_NAME
+              value: "bookstore-auth-service"
+            - name: PORT
+              value: "5001"
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: bookstore-config
+                  key: AUTH_DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: bookstore-config
+                  key: AUTH_DB_PORT
+            - name: DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: bookstore-config
+                  key: AUTH_DB_NAME
+          volumeMounts:
+            - name: clickstream-logs
+              mountPath: /usr/src/app/logs
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5001
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5001
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+
+        - name: clickstream-sidecar
+          image: public.ecr.aws/aws-observability/aws-for-fluent-bit:stable
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: clickstream-logs
+              mountPath: /usr/src/app/logs
+              readOnly: true
+            - name: fluent-bit-config
+              mountPath: /fluent-bit/etc/fluent-bit.conf
+              subPath: fluent-bit.conf
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "150m"
+              memory: "128Mi"
+
+      volumes:
+        - name: clickstream-logs
+          emptyDir: {}
+        - name: fluent-bit-config
+          configMap:
+            name: fluent-bit-sidecar-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  labels:
+    app: auth-service
+    tier: api
+spec:
+  type: ClusterIP
+  selector:
+    app: auth-service
+  ports:
+    - name: http
+      protocol: TCP
+      port: 5001
+      targetPort: 5001
