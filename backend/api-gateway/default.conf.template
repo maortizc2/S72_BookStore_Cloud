@@ -7,6 +7,13 @@ server {
     return 200 '{"status":"ok","service":"bookstore-api-gateway"}';
   }
 
+  # Endpoint interno: solo orders-service lo llama (directo a books-service:5002).
+  # Se bloquea aqui para que no sea accesible desde internet.
+  location = /api/books/stock/reserve {
+    default_type application/json;
+    return 404 '{"error":{"code":"NOT_FOUND","message":"Not found"}}';
+  }
+
   location /api/auth {
     proxy_pass ${AUTH_SERVICE_URL};
     proxy_http_version 1.1;
